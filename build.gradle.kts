@@ -22,6 +22,7 @@ kotlin {
         val nativeMain by getting {
             dependencies {
                 implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.7.0-RC")
+                implementation("com.squareup.okio:okio:3.3.0")
             }
         }
         val nativeTest by getting
