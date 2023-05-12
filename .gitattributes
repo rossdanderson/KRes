@@ -1,0 +1,21 @@
+# Handle line endings automatically for files detected as text
+# and leave all files detected as binary untouched.
+
+# This will handle all files not explicitly defined below
+* text=auto
+
+# These files are text and should be normalized to the specified line endings
+*.bat           text eol=crlf
+*.sh            text eol=lf
+*.conf          text eol=lf
+gradlew         text eol=lf
+
+# These files are text and should be normalized (Convert crlf <=> lf)
+*.kt            text
+*.java          text
+*.properties    text
+*.yml           text
+*.xml           text
+*.md            text
+*.gradle        text
+*.sql           text
