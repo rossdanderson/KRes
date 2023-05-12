@@ -13,16 +13,17 @@ import platform.windows.*
 
 lateinit var configPath: Path
 
-val defaultConfigResolutions = listOf(
-    5120 to 1440,
-    3440 to 1440,
-    2560 to 1440,
-    1920 to 1080,
-)
-lateinit var configResolutions: List<Pair<Int, Int>>
-lateinit var activeResolutions: List<Pair<Int, Int>>
-
 data class Variable(val name: String, val value: String)
+data class Resolution(val width: Int, val height: Int)
+
+val defaultConfigResolutions = listOf(
+    Resolution(5120, 1440),
+    Resolution(3440, 1440),
+    Resolution(2560, 1440),
+    Resolution(1920, 1080),
+)
+lateinit var configResolutions: List<Resolution>
+lateinit var activeResolutions: List<Resolution>
 
 fun main(): Unit = runBlocking {
     memScoped {
@@ -49,7 +50,7 @@ fun main(): Unit = runBlocking {
                         val line = source.readUtf8Line()
                         line?.let {
                             val split = it.split(" ")
-                            add(split[0].toInt() to split[1].toInt())
+                            add(Resolution(split[0].toInt(), split[1].toInt()))
                         }
                     } while (line != null)
                 }
@@ -59,7 +60,7 @@ fun main(): Unit = runBlocking {
         }.ifEmpty {
             FileSystem.SYSTEM.createDirectories(configDirectory, true)
             FileSystem.SYSTEM.sink(configPath).buffer().use { sink ->
-                defaultConfigResolutions.forEach { sink.writeUtf8("${it.first} ${it.second}\n") }
+                defaultConfigResolutions.forEach { sink.writeUtf8("${it.width} ${it.height}\n") }
             }
             defaultConfigResolutions
         }
@@ -132,9 +133,7 @@ fun windowProc(hWnd: HWND?, uMsg: UINT, wParam: WPARAM, lParam: LPARAM): LRESULT
                     val availableResolutions = buildSet {
                         var i = 0u
                         while (EnumDisplaySettingsW(null, i++, dm.ptr) == TRUE) {
-                            val width = dm.dmPelsWidth.toInt()
-                            val height = dm.dmPelsHeight.toInt()
-                            add(width to height)
+                            add(Resolution(dm.dmPelsWidth.toInt(), dm.dmPelsHeight.toInt()))
                         }
                     }
 
@@ -146,7 +145,7 @@ fun windowProc(hWnd: HWND?, uMsg: UINT, wParam: WPARAM, lParam: LPARAM): LRESULT
                             hMenu,
                             (MF_STRING or MF_ENABLED).convert(),
                             id.convert(),
-                            "${resolution.first} x ${resolution.second}"
+                            "${resolution.width} x ${resolution.height}"
                         )
                     }
 
@@ -175,8 +174,7 @@ fun windowProc(hWnd: HWND?, uMsg: UINT, wParam: WPARAM, lParam: LPARAM): LRESULT
         }
 
         WM_COMMAND.toUInt() -> {
-            val wmId = wParam.loword.toInt()
-            when (wmId) {
+            when (val wmId = wParam.loword.toInt()) {
                 1 -> ShellExecuteW(null, "edit", configPath.toString(), null, null, SW_SHOW)
                 2 -> PostQuitMessage(0)
                 else -> {
@@ -185,8 +183,8 @@ fun windowProc(hWnd: HWND?, uMsg: UINT, wParam: WPARAM, lParam: LPARAM): LRESULT
                         val dm = alloc<DEVMODE> {
                             dmSize = sizeOf<DEVMODE>().convert()
                             dmFields = (DM_PELSWIDTH or DM_PELSHEIGHT).convert()
-                            dmPelsWidth = it.first.convert()
-                            dmPelsHeight = it.second.convert()
+                            dmPelsWidth = it.width.convert()
+                            dmPelsHeight = it.height.convert()
                         }
                         ChangeDisplaySettingsW(dm.ptr, 1u)
                     }
@@ -203,5 +201,6 @@ fun windowProc(hWnd: HWND?, uMsg: UINT, wParam: WPARAM, lParam: LPARAM): LRESULT
 private val ULong.loword
     get() = this and 0xffffu
 
+@Suppress("unused")
 private val ULong.hiword
     get() = this.shr(16) and 0xffffu
