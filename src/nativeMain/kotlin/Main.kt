@@ -2,7 +2,7 @@ import kotlinx.cinterop.*
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.runBlocking
-import okio.FileSystem
+import okio.FileSystem.Companion.SYSTEM
 import okio.Path
 import okio.Path.Companion.DIRECTORY_SEPARATOR
 import okio.Path.Companion.toPath
@@ -25,96 +25,118 @@ val defaultConfigResolutions = listOf(
 lateinit var configResolutions: List<Resolution>
 lateinit var activeResolutions: List<Resolution>
 
-fun main(): Unit = runBlocking {
-    memScoped {
-        val localAppData = flow {
-            val envBlock = GetEnvironmentStringsW()
-            try {
-                var envVar = envBlock
-                while (envVar?.pointed != null) {
-                    emit(envVar.toKStringFromUtf16().split("=").let { variable -> Variable(variable[0], variable[1]) })
-                    envVar += lstrlen!!(envVar) + 1
+fun main() {
+    runBlocking {
+        memScoped {
+            val localAppData = flow {
+                val envBlock = GetEnvironmentStringsW()
+                try {
+                    var envVar = envBlock
+                    while (envVar?.pointed != null) {
+                        emit(
+                            envVar.toKStringFromUtf16().split("=")
+                                .let { variable -> Variable(variable[0], variable[1]) })
+                        envVar += lstrlen!!(envVar) + 1
+                    }
+                } finally {
+                    FreeEnvironmentStringsW(envBlock)
                 }
-            } finally {
-                FreeEnvironmentStringsW(envBlock)
+            }.first { it.name == "LOCALAPPDATA" }.value
+
+            val exePath = memScoped {
+                allocArray<WCHARVar>(MAX_PATH)
+                    .also { ptr -> GetModuleFileNameW(null, ptr, MAX_PATH.convert()) }
+                    .toKStringFromUtf16()
             }
-        }.first { it.name == "LOCALAPPDATA" }.value
 
-        val configDirectory = "$localAppData${DIRECTORY_SEPARATOR}KRes".toPath()
-        configPath = "$configDirectory${DIRECTORY_SEPARATOR}config.txt".toPath()
+            val folderPath = exePath.toPath().parent
 
-        configResolutions = try {
-            FileSystem.SYSTEM.source(configPath).buffer().use { source ->
-                buildList {
-                    do {
-                        val line = source.readUtf8Line()
-                        line?.let {
-                            val split = it.split(" ")
-                            add(Resolution(split[0].toInt(), split[1].toInt()))
-                        }
-                    } while (line != null)
+            val configDirectory = "$localAppData${DIRECTORY_SEPARATOR}KRes".toPath()
+            configPath = "$configDirectory${DIRECTORY_SEPARATOR}config.txt".toPath()
+
+            configResolutions = try {
+                SYSTEM.source(configPath).buffer().use { source ->
+                    buildList {
+                        do {
+                            val line = source.readUtf8Line()
+                            line?.let {
+                                val split = it.split(" ")
+                                add(Resolution(split[0].toInt(), split[1].toInt()))
+                            }
+                        } while (line != null)
+                    }
                 }
+            } catch (e: Exception) {
+                emptyList()
+            }.ifEmpty {
+                SYSTEM.createDirectories(configDirectory, true)
+                SYSTEM.sink(configPath).buffer().use { sink ->
+                    defaultConfigResolutions.forEach { sink.writeUtf8("${it.width} ${it.height}\n") }
+                }
+                defaultConfigResolutions
             }
-        } catch (e: Exception) {
-            emptyList()
-        }.ifEmpty {
-            FileSystem.SYSTEM.createDirectories(configDirectory, true)
-            FileSystem.SYSTEM.sink(configPath).buffer().use { sink ->
-                defaultConfigResolutions.forEach { sink.writeUtf8("${it.width} ${it.height}\n") }
+
+            val hInstance = GetModuleHandleW(null)
+            val appName = "KRes"
+
+            val wndClass = alloc<WNDCLASSW> {
+                lpfnWndProc = staticCFunction(::windowProc)
+                this.hInstance = hInstance
+                hCursor = LoadCursorW(null, IDC_ARROW)
+                lpszClassName = appName.wcstr.ptr
             }
-            defaultConfigResolutions
+
+            RegisterClassW(wndClass.ptr)
+
+            val hWnd = CreateWindowExW(
+                dwExStyle = 0u,
+                lpClassName = appName,
+                lpWindowName = "KRes",
+                dwStyle = WS_OVERLAPPEDWINDOW,
+                X = CW_USEDEFAULT,
+                Y = CW_USEDEFAULT,
+                nWidth = CW_USEDEFAULT,
+                nHeight = CW_USEDEFAULT,
+                hWndParent = null,
+                hMenu = null,
+                hInstance = hInstance,
+                lpParam = null,
+            )
+
+            val hIcon = runCatching {
+                val icoPath = SYSTEM.canonicalize("$folderPath${DIRECTORY_SEPARATOR}KRes.ico".toPath())
+                @Suppress("UNCHECKED_CAST")
+                LoadImageW(
+                    null,
+                    icoPath.toString().wcstr.ptr,
+                    1u,
+                    0,
+                    0,
+                    (LR_DEFAULTSIZE or LR_LOADFROMFILE).convert()
+                ) as HICON?
+            }.getOrElse { LoadIconW(null, IDI_APPLICATION) }
+
+            val nid = alloc<NOTIFYICONDATAW> {
+                cbSize = sizeOf<NOTIFYICONDATAW>().convert()
+                this.hWnd = hWnd
+                uID = 1u
+                uFlags = (NIF_ICON or NIF_MESSAGE or NIF_TIP).convert()
+                this.hIcon = hIcon
+                uCallbackMessage = (WM_USER + 1).convert()
+                wcscpy(szTip, "".wcstr)
+            }
+
+            Shell_NotifyIconW(NIM_ADD, nid.ptr)
+
+            val msg = alloc<MSG>().ptr
+            while (GetMessageW(msg, hWnd, 0u, 0u) == TRUE) {
+                TranslateMessage(msg)
+                DispatchMessageW(msg)
+            }
+
+            Shell_NotifyIconW(NIM_DELETE, nid.ptr)
+            DestroyWindow(hWnd)
         }
-
-        val hInstance = GetModuleHandleW(null)
-        val s = "KRes"
-
-        val wndClass = alloc<WNDCLASSW> {
-            lpfnWndProc = staticCFunction(::windowProc)
-            this.hInstance = hInstance
-            hCursor = LoadCursorW(null, IDC_ARROW)
-            lpszClassName = s.wcstr.ptr
-        }
-
-        RegisterClassW(wndClass.ptr)
-
-        val hWnd = CreateWindowExW(
-            dwExStyle = 0u,
-            lpClassName = s,
-            lpWindowName = "KRes",
-            dwStyle = WS_OVERLAPPEDWINDOW,
-            X = CW_USEDEFAULT,
-            Y = CW_USEDEFAULT,
-            nWidth = CW_USEDEFAULT,
-            nHeight = CW_USEDEFAULT,
-            hWndParent = null,
-            hMenu = null,
-            hInstance = hInstance,
-            lpParam = null,
-        )
-
-        val hIcon = LoadIconW(null, IDI_APPLICATION)
-
-        val nid = alloc<NOTIFYICONDATAW> {
-            cbSize = sizeOf<NOTIFYICONDATAW>().convert()
-            this.hWnd = hWnd
-            uID = 1u
-            uFlags = (NIF_ICON or NIF_MESSAGE or NIF_TIP).convert()
-            this.hIcon = hIcon
-            uCallbackMessage = (WM_USER + 1).convert()
-            szTip.toKStringFromUtf16()
-            wcscpy(szTip, "".wcstr)
-        }
-
-        Shell_NotifyIconW(NIM_ADD, nid.ptr)
-
-        val msg = alloc<MSG>().ptr
-        while (GetMessageW(msg, hWnd, 0u, 0u) == TRUE) {
-            TranslateMessage(msg)
-            DispatchMessageW(msg)
-        }
-
-        Shell_NotifyIconW(NIM_DELETE, nid.ptr)
-        DestroyWindow(hWnd)
     }
 }
 
